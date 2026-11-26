@@ -1,0 +1,8 @@
+{
+  "appId": "com.skilltree.app",
+  "appName": "SkillTree",
+  "webDir": "mobile-www",
+  "backgroundColor": "#0b0813",
+  "server": { "androidScheme": "https" },
+  "ios": { "contentInset": "never" }
+}
