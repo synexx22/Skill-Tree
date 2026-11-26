@@ -1,5 +1,5 @@
 // Service worker: офлайн-доступ к интерфейсу. Запросы /api/* никогда не кэшируются.
-const VERSION = 'skilltree-v2';
+const VERSION = 'skilltree-v3';
 const SHELL = ['/', '/legacy-app.html', '/config.js', '/manifest.webmanifest', '/data/skills.json', '/icons/icon-192.png'];
 
 self.addEventListener('install', (event) => {
