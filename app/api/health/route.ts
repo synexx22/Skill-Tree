@@ -10,6 +10,7 @@ export function GET(request: Request) {
       ok: true,
       provider: 'deepseek',
       aiConfigured: Boolean(process.env.DEEPSEEK_API_KEY),
+      model: process.env.DEEPSEEK_MODEL?.trim() || 'deepseek-v4-flash',
     },
     { headers: corsHeaders(request) },
   );
