@@ -99,6 +99,6 @@ describe('/api/ai (DeepSeek)', () => {
 
   it('health reports the DeepSeek key state', async () => {
     const res = GET(new Request('https://skilltree.test/api/health'));
-    expect(await res.json()).toEqual({ ok: true, provider: 'deepseek', aiConfigured: true });
+    expect(await res.json()).toEqual({ok:true,provider: 'deepseek',aiConfigured: true,model: 'deepseek-v4-flash'})
   });
 });
