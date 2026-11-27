@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SkillTree — диагностика</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#090611;color:#f5efff;margin:0;padding:16px;line-height:1.5}
+h1{font-size:20px}
+.row{padding:10px 12px;margin:8px 0;border-radius:10px;background:#1a1330}
+.ok{border-left:4px solid #3ddc84}.bad{border-left:4px solid #ff5470}.wait{border-left:4px solid #888}
+button{font-size:16px;padding:12px 16px;border:0;border-radius:10px;background:#7c4dff;color:#fff;margin:6px 6px 6px 0}
+pre{white-space:pre-wrap;word-break:break-word;font-size:12px;margin:6px 0 0}
+iframe{position:absolute;left:-9999px;width:400px;height:600px;border:0}
+</style>
+</head>
+<body>
+<h1>Диагностика SkillTree</h1>
+<div id="out"></div>
+<button id="clear">Сбросить кэш и service worker</button>
+<button id="reload">Проверить заново</button>
+<iframe id="frame" title="test"></iframe>
+<script>
+var out=document.getElementById('out');
+function row(state,title,detail){var d=document.createElement('div');d.className='row '+state;d.innerHTML='<b></b><pre></pre>';d.firstChild.textContent=(state==='ok'?'✅ ':state==='bad'?'❌ ':'… ')+title;d.lastChild.textContent=detail||'';out.appendChild(d)}
+async function run(){
+  out.innerHTML='';
+  try{
+    var r=await fetch('/legacy-app.html',{cache:'no-store'});
+    var t=await r.text();
+    var endsOk=/<\/html>\s*$/.test(t);
+    row(r.ok&&endsOk&&t.length>150000?'ok':'bad','Файл legacy-app.html на сервере','Статус: '+r.status+'\nРазмер: '+t.length+' символов (должно быть около 167 000)\nЗаканчивается на </html>: '+(endsOk?'да':'НЕТ — файл обрезан, загрузите его заново'));
+  }catch(e){row('bad','Файл legacy-app.html не загрузился',String(e))}
+  try{
+    var c=await fetch('/config.js',{cache:'no-store'});
+    row(c.ok?'ok':'bad','Файл config.js','Статус: '+c.status);
+  }catch(e){row('bad','Файл config.js',String(e))}
+  try{
+    var s=await fetch('/data/skills.json',{cache:'no-store'});var j=await s.json();
+    row(s.ok&&Array.isArray(j.skills)?'ok':'bad','Каталог skills.json','Навыков: '+(j.skills?j.skills.length:0));
+  }catch(e){row('bad','Каталог skills.json',String(e))}
+  try{
+    var i=await fetch('/images/t-default.svg',{cache:'no-store'});
+    row(i.ok?'ok':'bad','Папка images (регистр букв)','Статус: '+i.status+(i.ok?'':'\nПапка должна называться images (маленькими буквами)'));
+  }catch(e){row('bad','Папка images',String(e))}
+  var regs=navigator.serviceWorker?await navigator.serviceWorker.getRegistrations():[];
+  var names=window.caches?await caches.keys():[];
+  row(regs.length||names.length?'wait':'ok','Кэш и service worker','Service worker: '+regs.length+'\nКэши: '+(names.join(', ')||'нет')+'\nЕсли кнопки не нажимаются — нажмите «Сбросить кэш…».');
+  var errs=[];
+  var f=document.getElementById('frame');
+  await new Promise(function(res){
+    f.onload=function(){
+      try{
+        var w=f.contentWindow;
+        w.addEventListener('error',function(e){errs.push(e.message)});
+      }catch(e){errs.push(String(e))}
+      setTimeout(res,1200);
+    };
+    f.src='/legacy-app.html?diag='+Date.now();
+  });
+  try{
+    var d=f.contentDocument;
+    var fn=typeof f.contentWindow.showTopTab==='function';
+    var btn=d.querySelectorAll('button').length;
+    row(fn&&btn>50?'ok':'bad','Скрипт приложения запустился','Функция showTopTab: '+(fn?'есть':'НЕТ (скрипт сломан)')+'\nКнопок на странице: '+btn+(errs.length?'\nОшибки: '+errs.join(' | '):''));
+  }catch(e){row('bad','Проверка приложения',String(e))}
+}
+document.getElementById('reload').onclick=run;
+document.getElementById('clear').onclick=async function(){
+  var regs=navigator.serviceWorker?await navigator.serviceWorker.getRegistrations():[];
+  for(var r of regs)await r.unregister();
+  if(window.caches){for(var k of await caches.keys())await caches.delete(k)}
+  alert('Готово. Сейчас страница обновится.');
+  location.reload();
+};
+run();
+</script>
+</body>
+</html>
