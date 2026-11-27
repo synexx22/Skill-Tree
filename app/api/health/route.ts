@@ -8,9 +8,9 @@ export function GET(request: Request) {
   return NextResponse.json(
     {
       ok: true,
-      provider: 'deepseek',
-      aiConfigured: Boolean(process.env.DEEPSEEK_API_KEY),
-      model: process.env.DEEPSEEK_MODEL?.trim() || 'deepseek-v4-flash',
+      provider: 'gemini',
+      aiConfigured: Boolean(process.env.GEMINI_API_KEY),
+      model: process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash',
     },
     { headers: corsHeaders(request) },
   );
