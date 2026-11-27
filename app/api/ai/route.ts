@@ -22,8 +22,19 @@ const requestSchema = z
   })
   .refine((value) => value.mode === 'summary' || value.message.length <= MAX_CHAT_CHARS);
 
+// Gemini generateContent response: text lives in candidates[0].content.parts[]; "thought" parts are skipped.
 const providerResponseSchema = z.object({
-  choices: z.array(z.object({ message: z.object({ content: z.string().nullable() }) })).min(1),
+  candidates: z
+    .array(
+      z.object({
+        content: z
+          .object({
+            parts: z.array(z.object({ text: z.string().optional(), thought: z.boolean().optional() })).optional(),
+          })
+          .optional(),
+      }),
+    )
+    .min(1),
 });
 
 // Best-effort limiter: state lives per serverless instance and is not shared.
@@ -69,8 +80,8 @@ function buildContext(context: Record<string, unknown>): string {
     .join('; ');
 }
 
-const DEFAULT_API_URL = 'https://api.deepseek.com/chat/completions';
-const DEFAULT_MODEL = 'deepseek-v4-flash';
+const DEFAULT_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+const DEFAULT_MODEL = 'gemini-3.8-flash';
 
 export function OPTIONS(request: Request) {
   return preflight(request);
@@ -95,17 +106,20 @@ export async function POST(request: Request) {
   const parsed = requestSchema.safeParse(json);
   if (!parsed.success) return reply({ error: 'Message required (max 4000 chars, 12000 for summary).' }, 400);
 
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return reply({ error: 'AI API key is not configured.' }, 503);
 
   if (isRateLimited(clientKey(request))) {
     return reply({ error: 'Rate limit: try again in a minute.' }, 429);
   }
 
-  const model = process.env.DEEPSEEK_MODEL?.trim() || DEFAULT_MODEL;
-  // Thinking mode is off by default: it is slower and the lessons do not need it.
-  // With thinking on, DeepSeek ignores temperature and counts reasoning tokens in max_tokens.
-  const thinking = process.env.DEEPSEEK_THINKING === 'enabled';
+  const model = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
+  // Gemini 3.x models think by default. Thinking tokens count toward maxOutputTokens, so the limit is tripled,
+  // the thinking level defaults to LOW for speed, and temperature is left at the model default.
+  // Older models (2.x) keep temperature and get no thinkingConfig.
+  const isGemini3 = /^gemini-3/.test(model);
+  const level = (process.env.GEMINI_THINKING_LEVEL ?? '').trim().toUpperCase();
+  const thinkingLevel = ['LOW', 'MEDIUM', 'HIGH'].includes(level) ? level : 'LOW';
   const isSummary = parsed.data.mode === 'summary';
   const tokenLimit = isSummary ? 1400 : parsed.data.detailed ? 3500 : 900;
   const context = buildContext(parsed.data.context);
@@ -115,19 +129,19 @@ export async function POST(request: Request) {
     : `Ты учебный AI-помощник приложения SkillTree. Отвечай по-русски, дружелюбно, понятно и точно. Объясняй поэтапно, адаптируй сложность к указанному уровню, добавляй примеры и упражнения по запросу. Не выдавай опасные или медицинские/правовые инструкции как замену специалисту. ${contextNote}`;
 
   try {
-    const response = await fetch(process.env.DEEPSEEK_API_URL ?? DEFAULT_API_URL, {
+    const apiBase = process.env.GEMINI_API_BASE?.trim() || DEFAULT_API_BASE;
+    const response = await fetch(`${apiBase}/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: parsed.data.message },
-        ],
-        thinking: { type: thinking ? 'enabled' : 'disabled' },
-        ...(thinking
-          ? { max_tokens: tokenLimit * 3 }
-          : { max_tokens: tokenLimit, temperature: isSummary ? 0.3 : 0.65 }),
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts: [{ text: parsed.data.message }] }],
+        generationConfig: {
+          maxOutputTokens: isGemini3 ? tokenLimit * 3 : tokenLimit,
+          ...(isGemini3
+            ? { thinkingConfig: { thinkingLevel } }
+            : { temperature: isSummary ? 0.3 : 0.65 }),
+        },
       }),
       signal: AbortSignal.timeout(isSummary ? 40_000 : parsed.data.detailed ? 55_000 : 25_000),
     });
@@ -148,9 +162,13 @@ export async function POST(request: Request) {
     }
 
     const ok = providerResponseSchema.safeParse(data);
+    const parts = ok.success ? (ok.data.candidates[0]?.content?.parts ?? []) : [];
     const text =
-      (ok.success ? ok.data.choices[0]?.message.content : null)?.trim() ||
-      'Не удалось получить ответ. Попробуй ещё раз.';
+      parts
+        .filter((part) => !part.thought)
+        .map((part) => part.text ?? '')
+        .join('')
+        .trim() || 'Не удалось получить ответ. Попробуй ещё раз.';
     return reply({ reply: text });
   } catch (error) {
     if (error instanceof Error && error.name === 'TimeoutError') {
