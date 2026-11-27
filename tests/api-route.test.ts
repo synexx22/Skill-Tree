@@ -12,20 +12,20 @@ function post(body: unknown, headers: Record<string, string> = {}) {
   });
 }
 
-describe('/api/ai (DeepSeek)', () => {
+describe('/api/ai (Gemini)', () => {
   beforeEach(() => {
-    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key');
-    vi.stubEnv('DEEPSEEK_MODEL', '');
-    vi.stubEnv('DEEPSEEK_THINKING', '');
+    vi.stubEnv('GEMINI_API_KEY', 'test-key');
+    vi.stubEnv('GEMINI_MODEL', '');
+    vi.stubEnv('GEMINI_THINKING_LEVEL', '');
   });
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
 
-  it('calls DeepSeek with the bearer key and returns the reply', async () => {
+  it('calls Gemini with the API key header and returns the reply', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ choices: [{ message: { content: ' Привет! ' } }] }), { status: 200 }),
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: ' Привет! ' }] } }] }), { status: 200 }),
     );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -34,17 +34,60 @@ describe('/api/ai (DeepSeek)', () => {
     expect(await res.json()).toEqual({ reply: 'Привет!' });
 
     const [calledUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(calledUrl).toBe('https://api.deepseek.com/chat/completions');
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer test-key');
+    expect(calledUrl).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent');
+    expect((init.headers as Record<string, string>)['x-goog-api-key']).toBe('test-key');
     const sent = JSON.parse(init.body as string);
-    expect(sent.model).toBe('deepseek-v4-flash');
-    expect(sent.thinking).toEqual({ type: 'disabled' });
-    expect(sent.max_tokens).toBe(900);
+    expect(sent.contents[0].parts[0].text).toBe('Объясни дроби');
+    expect(sent.generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'LOW' });
+    expect(sent.generationConfig.maxOutputTokens).toBe(2700);
+    expect(sent.generationConfig.temperature).toBeUndefined();
   });
 
-  it('summary mode uses a dedicated prompt, a low temperature and accepts long texts', async () => {
+  it('skips thought parts and joins the visible text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: 'скрыто', thought: true }, { text: 'Ответ ' }, { text: 'готов' }] } }] }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const res = await POST(post({ message: 'привет' }, { 'x-forwarded-for': '10.0.0.5' }));
+    expect(await res.json()).toEqual({ reply: 'Ответ готов' });
+  });
+
+  it('older models keep temperature and get no thinkingConfig', async () => {
+    vi.stubEnv('GEMINI_MODEL', 'gemini-2.5-flash');
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ choices: [{ message: { content: '## Суть\nКоротко.' } }] }), { status: 200 }),
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await POST(post({ message: 'привет' }, { 'x-forwarded-for': '10.0.0.6' }));
+    const [calledUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(calledUrl).toContain('/models/gemini-2.5-flash:generateContent');
+    const sent = JSON.parse(init.body as string);
+    expect(sent.generationConfig.thinkingConfig).toBeUndefined();
+    expect(sent.generationConfig.temperature).toBe(0.65);
+    expect(sent.generationConfig.maxOutputTokens).toBe(900);
+  });
+
+  it('forwards the status and message when the provider fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: { code: 429, message: 'Quota exceeded' } }), { status: 429 }),
+      ),
+    );
+    const res = await POST(post({ message: 'привет' }, { 'x-forwarded-for': '10.0.0.7' }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: 'AI provider request failed (429: Quota exceeded).' });
+  });
+
+  it('summary mode uses a dedicated prompt and accepts long texts', async () => {
+    vi.stubEnv('GEMINI_MODEL', 'gemini-2.5-flash');
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '## Суть\nКоротко.' }] } }] }), { status: 200 }),
     );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -57,14 +100,14 @@ describe('/api/ai (DeepSeek)', () => {
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const sent = JSON.parse(init.body as string);
-    expect(sent.max_tokens).toBe(1400);
-    expect(sent.temperature).toBe(0.3);
-    expect(sent.messages[0].content).toContain('саммари');
-    expect(sent.messages[1].content).toBe(longText.trim());
+    expect(sent.generationConfig.maxOutputTokens).toBe(1400);
+    expect(sent.generationConfig.temperature).toBe(0.3);
+    expect(sent.systemInstruction.parts[0].text).toContain('саммари');
+    expect(sent.contents[0].parts[0].text).toBe(longText.trim());
   });
 
   it('long messages are rejected in chat mode but not in summary mode', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }))));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }))));
     const text = 'a'.repeat(8000);
     const chat = await POST(post({ message: text }, { 'x-forwarded-for': '10.0.1.2' }));
     expect(chat.status).toBe(400);
@@ -75,7 +118,7 @@ describe('/api/ai (DeepSeek)', () => {
   });
 
   it('returns 503 without a key', async () => {
-    vi.stubEnv('DEEPSEEK_API_KEY', '');
+    vi.stubEnv('GEMINI_API_KEY', '');
     const res = await POST(post({ message: 'привет' }, { 'x-forwarded-for': '10.0.0.2' }));
     expect(res.status).toBe(503);
   });
@@ -84,7 +127,7 @@ describe('/api/ai (DeepSeek)', () => {
     const foreign = await POST(post({ message: 'x' }, { origin: 'https://evil.example', 'x-forwarded-for': '10.0.0.3' }));
     expect(foreign.status).toBe(403);
 
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }))));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }))));
     const app = await POST(post({ message: 'x' }, { origin: 'capacitor://localhost', 'x-forwarded-for': '10.0.0.4' }));
     expect(app.status).toBe(200);
     expect(app.headers.get('access-control-allow-origin')).toBe('capacitor://localhost');
@@ -97,8 +140,8 @@ describe('/api/ai (DeepSeek)', () => {
     expect(bad.status).toBe(403);
   });
 
-  it('health reports the DeepSeek key state', async () => {
+  it('health reports the Gemini key state', async () => {
     const res = GET(new Request('https://skilltree.test/api/health'));
-    expect(await res.json()).toEqual({ok:true,provider: 'deepseek',aiConfigured: true,model: 'deepseek-v4-flash'})
+    expect(await res.json()).toEqual({ ok: true, provider: 'gemini', aiConfigured: true, model: 'gemini-3.8-flash' });
   });
 });
