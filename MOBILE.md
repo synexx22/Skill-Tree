@@ -31,10 +31,10 @@ SKILLTREE_API_BASE=https://твой-проект.vercel.app npm run mobile:andro
 
 Что важно:
 - `SKILLTREE_API_BASE` — только `https://`-адрес задеплоенного сайта, без слэша на конце.
-- Ключ DeepSeek в приложение **не попадает**, он хранится только в переменных Vercel.
+- Ключ Gemini в приложение **не попадает**, он хранится только в переменных Vercel.
 - Сервер уже разрешает запросы с `capacitor://localhost` (iOS) и `https://localhost` (Android).
   Если сменишь `androidScheme` или `appId` — проверь `lib/cors.ts` / `ALLOWED_ORIGINS`.
 - Идентификатор `com.skilltree.app` и название меняются в `capacitor.config.json` до `cap add`.
 - Для публикации понадобятся аккаунты Google Play ($25 разово) и Apple Developer ($99/год),
-  а также политика конфиденциальности (приложение отправляет тексты запросов в DeepSeek).
+  а также политика конфиденциальности (приложение отправляет тексты запросов в Gemini (Google)).
 - Прогресс хранится в `localStorage` приложения; кнопка «Экспорт прогресса» в настройках делает резервную копию.
